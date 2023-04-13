@@ -4,86 +4,75 @@ defmodule PlugDbSession.Store do
     config = Application.get_env(otp_app, PlugDbSession, [])
 
     %{
-      include_in_cookie: [:_csrf_token, :session_id | Keyword.get(opts, :include_in_cookie, [])],
+      cookie_keys: ["session_id" | Keyword.get(opts, :cookie_keys, ["_csrf_token"])],
       vault: Keyword.get(config, :vault),
       repo: Keyword.get(config, :repo),
-      schema: Keyword.get(config, :schema, PlugDbSession.Session),
+      schema: Keyword.get(config, :schema),
       json: Keyword.get(config, :json)
     }
   end
 
   def get(_conn, cookie, opts) do
-    cookie_data = decrypt_cookie(cookie, opts)
-
-    case cookie_data do
-      %{"session_id" => session_id} ->
-        session = opts.repo.get(opts.schema, session_id)
-
-        {session_id, decrypt_data(session.data, opts)}
-
+    try do
+      %{"session_id" => session_id} = decrypt_cookie(cookie, opts)
+      session = opts.repo.get(opts.schema, session_id)
+      {session.id, session.data}
+    rescue
       _ ->
         session = create_initial_session(%{}, opts)
-
         {session.id, %{}}
     end
   end
 
   # called on first page load with no cookie
   def put(_conn, nil = _sid, session_map, opts) do
-    session = opts.schema |> struct(data: encrypt_data(session_map, opts)) |> opts.repo.insert!()
-
+    session = create_initial_session(session_map, opts)
     create_cookie_from_session(session, opts)
   end
 
   def put(conn, sid, session_data, opts) do
-    session = opts.repo.get(opts.schema, sid)
-
-    case session do
+    case opts.repo.get(opts.schema, sid) do
       nil ->
         put(conn, nil, session_data, opts)
 
-      _ ->
-        session =
-          session
-          |> Ecto.Changeset.change(%{data: encrypt_data(session_data, opts)})
-          |> opts.repo.update!()
+      session ->
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-        create_cookie_from_session(session, opts)
+        session
+        |> Ecto.Changeset.change(%{data: session_data, last_active_at: now})
+        |> opts.repo.update!()
+        |> create_cookie_from_session(opts)
     end
   end
 
   def delete(_conn, sid, opts) do
     session = struct(opts.schema, id: sid)
-
     opts.repo.delete(session)
 
     :ok
   end
 
   defp create_cookie_from_session(session, opts) do
-    data = decrypt_data(session.data, opts)
+    cookie_keys = Map.get(opts, :cookie_keys, [])
 
-    %{session_id: session.id, _csrf_token: data["_csrf_token"]}
+    cookie_extra =
+      Map.filter(session.data, fn {key, _value} -> Enum.member?(cookie_keys, key) end)
+
+    cookie_required = %{"session_id" => session.id}
+
+    Map.merge(cookie_required, cookie_extra)
     |> encrypt_cookie(opts)
   end
 
   defp create_initial_session(initial_data, opts) do
-    opts.schema |> struct(data: encrypt_data(initial_data, opts)) |> opts.repo.insert!()
-  end
-
-  defp encrypt_data(data, opts) do
-    data |> opts.json.encode!() |> opts.vault.encrypt!()
-  end
-
-  defp decrypt_data(bin, opts) do
-    bin |> opts.vault.decrypt!() |> opts.json.decode!()
+    opts.schema |> struct(data: initial_data) |> opts.repo.insert!()
   end
 
   defp encrypt_cookie(data, opts) do
-    data |> encrypt_data(opts) |> Base.encode64()
+    data |> opts.json.encode!() |> opts.vault.encrypt!() |> Base.encode64()
   end
 
   defp decrypt_cookie(str, opts) do
-    str |> Base.decode64!() |> decrypt_data(opts)
+    str |> Base.decode64!() |> opts.vault.decrypt!() |> opts.json.decode!()
   end
 end
