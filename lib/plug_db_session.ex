@@ -1,0 +1,2 @@
+defmodule PlugDbSession do
+end
