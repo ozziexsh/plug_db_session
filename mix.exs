@@ -22,7 +22,8 @@ defmodule PlugDbSession.MixProject do
   defp deps do
     [
       {:ecto, "~> 3.10"},
-      {:plug, "~> 1.14"}
+      {:plug, "~> 1.14"},
+      {:jason, "~> 1.2"}
     ]
   end
 end

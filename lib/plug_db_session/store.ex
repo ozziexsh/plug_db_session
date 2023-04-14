@@ -1,4 +1,11 @@
 defmodule PlugDbSession.Store do
+  @moduledoc """
+  A custom Plug session store that saves the session to the database
+  """
+
+  @behaviour Plug.Session.Store
+
+  @impl Plug.Session.Store
   def init(opts) do
     otp_app = Keyword.get(opts, :otp_app)
     config = Application.get_env(otp_app, PlugDbSession, [])
@@ -12,6 +19,7 @@ defmodule PlugDbSession.Store do
     }
   end
 
+  @impl Plug.Session.Store
   def get(_conn, cookie, opts) do
     try do
       %{"session_id" => session_id} = decrypt_cookie(cookie, opts)
@@ -25,11 +33,13 @@ defmodule PlugDbSession.Store do
   end
 
   # called on first page load with no cookie
+  @impl Plug.Session.Store
   def put(_conn, nil = _sid, session_map, opts) do
     session = create_initial_session(session_map, opts)
     create_cookie_from_session(session, opts)
   end
 
+  @impl Plug.Session.Store
   def put(conn, sid, session_data, opts) do
     case opts.repo.get(opts.schema, sid) do
       nil ->
@@ -45,6 +55,7 @@ defmodule PlugDbSession.Store do
     end
   end
 
+  @impl Plug.Session.Store
   def delete(_conn, sid, opts) do
     session = struct(opts.schema, id: sid)
     opts.repo.delete(session)

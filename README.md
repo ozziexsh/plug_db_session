@@ -14,7 +14,7 @@ The PlugDbSession package still uses cookies, but it offloads all of the data st
 
 Using this approach, you can store much more data in the session, revoke sessions on demand, and see when they were last active.
 
-In the future we will allow arbitrary data to be added to the session schema, allowing you to collect metadata such as tying a sessio to a user_id, IP, user agent, etc. This can be useful if you e.g. show your logged in users which devices they are logged into and allow them to revoke access on their own.
+In the future we will allow arbitrary data to be added to the session schema, allowing you to collect metadata such as tying a session to a user_id, IP, user agent, etc. This can be useful if you e.g. show your logged in users which devices they are logged into and allow them to revoke access on their own.
 
 ## Installation
 
@@ -30,6 +30,8 @@ end
 
 The following dependencies are recommended for using this package. Technically these are configurable (see [Customization](#customization) below) but for the purpose of the installation steps we will assume you are using the recommended ones.
 
+`cloak` and `cloak_ecto` are used for encrypting the cookie as well as encrypting the session in the database. `jason` is used for turning our map of session data into a string before encrypting and inserting into the database.
+
 ```elixir
 def deps do
   [    
@@ -41,11 +43,11 @@ def deps do
 end
 ```
 
-You will need to follow the instructions to set up cloak properly: 
+You will need to follow the instructions to set up cloak properly before continuing: 
 
 https://hexdocs.pm/cloak/install.html
 
-By now you should have configured your apps' Vault module and set an encryption key.
+By now you should have configured your Vault module and set an encryption key.
 
 We need to create a migration and a schema for the sessions table:
 
@@ -89,7 +91,7 @@ defmodule MyApp.Sessions.Session do
 end
 ```
 
-Now we can configure PlugDbSession:
+Configure PlugDbSession to use our dependencies:
 
 ```elixir
 config :my_app, PlugDbSession,
@@ -99,7 +101,7 @@ config :my_app, PlugDbSession,
   schema: MyApp.Sessions.Session
 ```
 
-Next we need to update our Endpoint
+Update our Endpoint to use the new session store, note that we do not pass any encryption options here as it is taken care of by `cloak`:
 
 ```elixir
 defmodule MyAppWeb.Endpoint do
@@ -112,7 +114,7 @@ defmodule MyAppWeb.Endpoint do
   ]
 ```
 
-And finally add this plug to the end of your `router.ex` browser pipeline
+And finally add this plug to the end of your `router.ex` browser pipeline to ensure that the `last_active_at` timestamp is set on each request:
 
 ```diff
 pipeline :browser do
