@@ -8,13 +8,23 @@ The default cookie session store places all data directly into the cookie and th
 
 The PlugDbSession package still uses cookies, but it offloads all of the data storage to your database:
 
-1. We create a record in the database with a unique ID like `{ id: "some-uuid", data: <encrypted json>, last_active_at: "2023-01-01T00:00Z" }`
-2. We send the browser a cookie that looks like `{ "session_id": "some-uuid" }`
-3. When you set session data in your app, instead of adding to that cookie we look up the row in the  `sessions` table and update the `data` column (encrypted json)
+1. We create a record in the database with a unique ID like `{ id: "some-uuid", data: <encrypted binary>, last_active_at: "2023-01-01T00:00Z" }`
+2. We send the browser an encrypted cookie that looks like `{ "session_id": "some-uuid" }`
+3. When you set session data in your app, instead of adding directly to that cookie we look up the row in the  `sessions` table and update the `data` column
 
-Using this approach, you can store much more data in the session, revoke sessions on demand, and see when they were last active.
+Using this approach, you can:
+- store much more data in the session
+- store any elixir data type in the session (see ["considerations"](#considerations) below)
+- revoke sessions on demand
+- see when they were last active
 
 In the future we will allow arbitrary data to be added to the session schema, allowing you to collect metadata such as tying a session to a user_id, IP, user agent, etc. This can be useful if you e.g. show your logged in users which devices they are logged into and allow them to revoke access on their own.
+
+## Considerations
+
+Under the hood we convert session data using [`:erlang.term_to_binary/1`](https://www.erlang.org/doc/man/erlang.html#term_to_binary-1) and [`:erlang.binary_to_term/1`](https://www.erlang.org/doc/man/erlang.html#binary_to_term-1). This allows you to store any data type in the session and successfully restore it on future loads, however you should make sure you trust the data being stored as there is risk involved, see the documentation for the methods linked above for more info.
+
+If you wish to use a more basic serialization method like `Jason`, see ["Customization"](#encoder--serialization) below.
 
 ## Installation
 
@@ -28,17 +38,12 @@ def deps do
 end
 ```
 
-The following dependencies are recommended for using this package. Technically these are configurable (see [Customization](#customization) below) but for the purpose of the installation steps we will assume you are using the recommended ones.
-
-`cloak` and `cloak_ecto` are used for encrypting the cookie as well as encrypting the session in the database. `jason` is used for turning our map of session data into a string before encrypting and inserting into the database.
+You will also need an encryption library, it is recommended to use `cloak`:
 
 ```elixir
 def deps do
   [    
-    # recommended dependencies
-    {:cloak, "~> 1.1"},
-    {:cloak_ecto, "~> 1.2.0"},
-    {:jason, "~> 1.2"}
+    {:cloak, "~> 1.1"}
   ]
 end
 ```
@@ -74,7 +79,7 @@ defmodule MyApp.Repo.Migrations.CreateSessionsTable do
 end
 ```
 
-We also need to create a schema for the sessions. It is HIGHLY recommended to setup cloak_ecto and use an encrypted map ecto type. https://hexdocs.pm/cloak_ecto/Cloak.Ecto.Map.html#content
+We also need to create a schema for the sessions:
 
 ```elixir
 # lib/my_app/sessions/session.ex
@@ -84,7 +89,7 @@ defmodule MyApp.Sessions.Session do
   @primary_key {:id, :binary_id, autogenerate: true}
 
   schema "sessions" do
-    field :data, MyApp.Encrypted.Map
+    field :data, :binary
     field :last_active_at, :utc_datetime
     field :created_at, :utc_datetime
   end
@@ -96,9 +101,8 @@ Configure PlugDbSession to use our dependencies:
 ```elixir
 config :my_app, PlugDbSession,
   repo: MyApp.Repo,
-  vault: MyApp.Vault,
-  json: Jason,
-  schema: MyApp.Sessions.Session
+  schema: MyApp.Sessions.Session,
+  vault: MyApp.Vault
 ```
 
 Update our Endpoint to use the new session store, note that we do not pass any encryption options here as it is taken care of by `cloak`:
@@ -116,7 +120,7 @@ defmodule MyAppWeb.Endpoint do
 
 And finally add this plug to the end of your `router.ex` browser pipeline to ensure that the `last_active_at` timestamp is set on each request:
 
-```diff
+```elixir
 pipeline :browser do
   plug :accepts, ["html"]
   plug :fetch_session
@@ -124,9 +128,11 @@ pipeline :browser do
   plug :put_root_layout, {PhxWeb.Layouts, :root}
   plug :protect_from_forgery
   plug :put_secure_browser_headers
-+ plug PlugDbSession.UpdateActivity
+  plug PlugDbSession.UpdateActivity # <-- add this line
 end
 ```
+
+That is it! You can now interact with the plug session as you normally would.
 
 ## Pruning
 
@@ -164,17 +170,17 @@ defmodule MyAppWeb.Endpoint do
 
 Values will be taken from the session data matching the provided keys and added directly to the cookie. If you overwrite this value you must pass `_csrf_token` manually again so that csrf protection continues to work. Likewise, if your app is not using csrf protection or you are using a different key, you can either omit it all together or enter your custom key here.
 
-### JSON
+### Encoder / Serialization
 
-You can swap the json encoder via the config. It must have methods `encode!/1` that takes a map and returns a string, and `decode!/1` that takes a string and returns a map.
+You can change how the session is serialized to the database by specifying an `:encoder` conifg. The module must have two methods: `encode!/1` which takes a map and returns a binary/string, and `decode!/1` which takes a binary/string and returns a map. For example, you could use `Jason`:
 
 ```elixir
-config :my_app, PlugDbSession, json: Poison
+config :my_app, PlugDbSession, ecoder: Jason
 ```
 
 ### Vault
 
-You can swap the encryption module via the config. It must have methods `encrypt!/1` that takes a string and returns a string, and a `decrypt!/1` method which takes a string and returns a string.
+You can swap the encryption module via the config. It must have methods `encrypt!/1` that takes a binary returns a binary, and a `decrypt!/1` method which takes a binary and returns a binary.
 
 ```elixir
 config :my_app, PlugDbSession, vault: MyApp.CustomEncryption

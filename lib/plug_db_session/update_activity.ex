@@ -1,6 +1,8 @@
 defmodule PlugDbSession.UpdateActivity do
   @moduledoc """
   Plug that forces the session to update at the end of the request, causing the last_active_at timestamp to update.
+
+  Implements `Plug` behaviour
   """
 
   @behaviour Plug

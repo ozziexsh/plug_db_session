@@ -26,3 +26,5 @@ plug_db_session-*.tar
 /tmp/
 
 /.elixir_ls/
+
+.DS_Store

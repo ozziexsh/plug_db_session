@@ -1,6 +1,12 @@
 defmodule PlugDbSession.Store do
   @moduledoc """
-  A custom Plug session store that saves the session to the database
+  A custom Plug session store that saves the session to the database.
+
+  Implements `Plug.Session.Store` behaviour.
+
+  ## Options
+    * `:otp_app` - (required) your otp app atom
+    * `:cookie_keys` - (optional) array of session data keys to include directly on the cookie
   """
 
   @behaviour Plug.Session.Store
@@ -15,7 +21,7 @@ defmodule PlugDbSession.Store do
       vault: Keyword.get(config, :vault),
       repo: Keyword.get(config, :repo),
       schema: Keyword.get(config, :schema),
-      json: Keyword.get(config, :json)
+      encoder: Keyword.get(config, :encoder, PlugDbSession.Encoder)
     }
   end
 
@@ -24,7 +30,7 @@ defmodule PlugDbSession.Store do
     try do
       %{"session_id" => session_id} = decrypt_cookie(cookie, opts)
       session = opts.repo.get(opts.schema, session_id)
-      {session.id, session.data}
+      {session.id, decrypt_data(session.data, opts)}
     rescue
       _ ->
         session = create_initial_session(%{}, opts)
@@ -49,7 +55,7 @@ defmodule PlugDbSession.Store do
         now = DateTime.utc_now() |> DateTime.truncate(:second)
 
         session
-        |> Ecto.Changeset.change(%{data: session_data, last_active_at: now})
+        |> Ecto.Changeset.change(%{data: encrypt_data(session_data, opts), last_active_at: now})
         |> opts.repo.update!()
         |> create_cookie_from_session(opts)
     end
@@ -67,7 +73,9 @@ defmodule PlugDbSession.Store do
     cookie_keys = Map.get(opts, :cookie_keys, [])
 
     cookie_extra =
-      Map.filter(session.data, fn {key, _value} -> Enum.member?(cookie_keys, key) end)
+      session.data
+      |> decrypt_data(opts)
+      |> Map.filter(fn {key, _value} -> Enum.member?(cookie_keys, key) end)
 
     cookie_required = %{"session_id" => session.id}
 
@@ -76,14 +84,22 @@ defmodule PlugDbSession.Store do
   end
 
   defp create_initial_session(initial_data, opts) do
-    opts.schema |> struct(data: initial_data) |> opts.repo.insert!()
+    opts.schema |> struct(data: encrypt_data(initial_data, opts)) |> opts.repo.insert!()
+  end
+
+  defp encrypt_data(data, opts) do
+    data |> opts.encoder.encode!() |> opts.vault.encrypt!()
+  end
+
+  defp decrypt_data(bin, opts) do
+    bin |> opts.vault.decrypt!() |> opts.encoder.decode!()
   end
 
   defp encrypt_cookie(data, opts) do
-    data |> opts.json.encode!() |> opts.vault.encrypt!() |> Base.encode64()
+    data |> encrypt_data(opts) |> Base.encode64(padding: false)
   end
 
   defp decrypt_cookie(str, opts) do
-    str |> Base.decode64!() |> opts.vault.decrypt!() |> opts.json.decode!()
+    str |> Base.decode64!(padding: false) |> decrypt_data(opts)
   end
 end
