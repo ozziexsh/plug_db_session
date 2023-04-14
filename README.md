@@ -105,7 +105,7 @@ config :my_app, PlugDbSession,
   vault: MyApp.Vault
 ```
 
-Update our Endpoint to use the new session store, note that we do not pass any encryption options here as it is taken care of by `cloak`:
+Update our Endpoint `@session_options` to pass our `otp_app` and the new session store, note that we do not pass any encryption options here as it is taken care of by `cloak`:
 
 ```elixir
 defmodule MyAppWeb.Endpoint do
