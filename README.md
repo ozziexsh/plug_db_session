@@ -10,7 +10,7 @@ The PlugDbSession package still uses cookies, but it offloads all of the data st
 
 1. We create a record in the database with a unique ID like `{ id: "some-uuid", data: <encrypted binary>, last_active_at: "2023-01-01T00:00Z" }`
 2. We send the browser an encrypted cookie that looks like `{ "session_id": "some-uuid" }`
-3. When you set session data in your app, instead of adding directly to that cookie we look up the row in the  `sessions` table and update the `data` column
+3. When you set session data in your app, instead of adding directly to that cookie we look up the row in the  `sessions` table and update the `data` column (which is also encrypted)
 
 Using this approach, you can:
 - store much more data in the session
