@@ -76,11 +76,12 @@ defmodule PlugDbSession.UpdateActivityTest do
       cutoff = DateTime.add(now, -7200, :second)
       Process.put(:test_cutoff, cutoff)
 
-      {count, nil} = UpdateActivity.prune(
-        repo: TestRepo,
-        schema: Session,
-        lifetime: 7200
-      )
+      {count, nil} =
+        UpdateActivity.prune(
+          repo: TestRepo,
+          schema: Session,
+          lifetime: 7200
+        )
 
       # Old session should be deleted, recent should remain
       assert count == 1
@@ -122,10 +123,10 @@ defmodule PlugDbSession.UpdateActivityTest do
 
   describe "init/1" do
     test "sets default lottery" do
-      Application.put_env(:test_app, PlugDbSession, [
+      Application.put_env(:test_app, PlugDbSession,
         repo: TestRepo,
         schema: Session
-      ])
+      )
 
       opts = UpdateActivity.init(otp_app: :test_app)
 
@@ -136,10 +137,10 @@ defmodule PlugDbSession.UpdateActivityTest do
     end
 
     test "allows custom lottery" do
-      Application.put_env(:test_app, PlugDbSession, [
+      Application.put_env(:test_app, PlugDbSession,
         repo: TestRepo,
         schema: Session
-      ])
+      )
 
       opts = UpdateActivity.init(otp_app: :test_app, lottery: {5, 100})
 
@@ -149,10 +150,10 @@ defmodule PlugDbSession.UpdateActivityTest do
     end
 
     test "allows custom lifetime" do
-      Application.put_env(:test_app, PlugDbSession, [
+      Application.put_env(:test_app, PlugDbSession,
         repo: TestRepo,
         schema: Session
-      ])
+      )
 
       opts = UpdateActivity.init(otp_app: :test_app, lifetime: 3600)
 

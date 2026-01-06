@@ -19,7 +19,6 @@ defmodule PlugDbSession.StoreTest do
     def decrypt!(val), do: val
   end
 
-
   defmodule TestRepo do
     # Store sessions in process dictionary for test isolation
     def insert!(session) do
@@ -107,7 +106,11 @@ defmodule PlugDbSession.StoreTest do
 
     test "it creates a new session when token is present in cookie but not found in db" do
       unknown_token = "unknown-token-xyz"
-      fake_cookie = %{"session_id" => unknown_token} |> :erlang.term_to_binary() |> Base.encode64(padding: false)
+
+      fake_cookie =
+        %{"session_id" => unknown_token}
+        |> :erlang.term_to_binary()
+        |> Base.encode64(padding: false)
 
       {token, data} = Store.get(nil, fake_cookie, @opts)
 
@@ -127,7 +130,11 @@ defmodule PlugDbSession.StoreTest do
 
     test "it returns the session data when it finds a matching session" do
       known_token = "test-token-with-data"
-      fake_cookie = %{"session_id" => known_token} |> :erlang.term_to_binary() |> Base.encode64(padding: false)
+
+      fake_cookie =
+        %{"session_id" => known_token}
+        |> :erlang.term_to_binary()
+        |> Base.encode64(padding: false)
 
       {token, data} = Store.get(nil, fake_cookie, @opts)
 
@@ -157,8 +164,12 @@ defmodule PlugDbSession.StoreTest do
 
     test "it returns the existing session token when found, and only the keys in cookie_keys" do
       known_token = "test-token-with-data"
+
       cookie =
-        Store.put(nil, known_token, %{"bar" => "baz", "foo" => "bar"}, %{@opts | cookie_keys: ["session_id", "bar"]})
+        Store.put(nil, known_token, %{"bar" => "baz", "foo" => "bar"}, %{
+          @opts
+          | cookie_keys: ["session_id", "bar"]
+        })
 
       decrypted = cookie |> Base.decode64!(padding: false) |> :erlang.binary_to_term()
 
@@ -201,17 +212,24 @@ defmodule PlugDbSession.StoreTest do
     test "it creates a new session when the existing session is expired" do
       # Create an expired session (last_active_at is 3 hours ago)
       expired_token = "expired-token"
+
       expired_session = %Session{
         id: :crypto.hash(:sha256, expired_token),
         data: :erlang.term_to_binary(%{"old" => "data"}),
-        last_active_at: DateTime.utc_now() |> DateTime.add(-10800, :second) |> DateTime.truncate(:second),
-        created_at: DateTime.utc_now() |> DateTime.add(-10800, :second) |> DateTime.truncate(:second)
+        last_active_at:
+          DateTime.utc_now() |> DateTime.add(-10800, :second) |> DateTime.truncate(:second),
+        created_at:
+          DateTime.utc_now() |> DateTime.add(-10800, :second) |> DateTime.truncate(:second)
       }
 
       sessions = Process.get(:test_sessions, %{})
       Process.put(:test_sessions, Map.put(sessions, expired_session.id, expired_session))
 
-      fake_cookie = %{"session_id" => expired_token} |> :erlang.term_to_binary() |> Base.encode64(padding: false)
+      fake_cookie =
+        %{"session_id" => expired_token}
+        |> :erlang.term_to_binary()
+        |> Base.encode64(padding: false)
+
       opts_with_lifetime = Map.put(@opts, :lifetime, 7200)
 
       {token, data} = Store.get(nil, fake_cookie, opts_with_lifetime)
@@ -223,7 +241,12 @@ defmodule PlugDbSession.StoreTest do
 
     test "it returns session data when session is not expired" do
       known_token = "test-token-with-data"
-      fake_cookie = %{"session_id" => known_token} |> :erlang.term_to_binary() |> Base.encode64(padding: false)
+
+      fake_cookie =
+        %{"session_id" => known_token}
+        |> :erlang.term_to_binary()
+        |> Base.encode64(padding: false)
+
       opts_with_lifetime = Map.put(@opts, :lifetime, 7200)
 
       {token, data} = Store.get(nil, fake_cookie, opts_with_lifetime)
@@ -235,17 +258,22 @@ defmodule PlugDbSession.StoreTest do
     test "it does not expire sessions when lifetime is nil" do
       # Create an old session
       old_token = "old-token"
+
       old_session = %Session{
         id: :crypto.hash(:sha256, old_token),
         data: :erlang.term_to_binary(%{"still" => "valid"}),
-        last_active_at: DateTime.utc_now() |> DateTime.add(-86400, :second) |> DateTime.truncate(:second),
-        created_at: DateTime.utc_now() |> DateTime.add(-86400, :second) |> DateTime.truncate(:second)
+        last_active_at:
+          DateTime.utc_now() |> DateTime.add(-86400, :second) |> DateTime.truncate(:second),
+        created_at:
+          DateTime.utc_now() |> DateTime.add(-86400, :second) |> DateTime.truncate(:second)
       }
 
       sessions = Process.get(:test_sessions, %{})
       Process.put(:test_sessions, Map.put(sessions, old_session.id, old_session))
 
-      fake_cookie = %{"session_id" => old_token} |> :erlang.term_to_binary() |> Base.encode64(padding: false)
+      fake_cookie =
+        %{"session_id" => old_token} |> :erlang.term_to_binary() |> Base.encode64(padding: false)
+
       opts_no_expiry = Map.put(@opts, :lifetime, nil)
 
       {token, data} = Store.get(nil, fake_cookie, opts_no_expiry)
@@ -254,5 +282,4 @@ defmodule PlugDbSession.StoreTest do
       assert data == %{"still" => "valid"}
     end
   end
-
 end
