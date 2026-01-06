@@ -78,7 +78,8 @@ defmodule PlugDbSession.StoreTest do
                vault: nil,
                repo: nil,
                schema: nil,
-               encoder: PlugDbSession.Encoder
+               encoder: PlugDbSession.Encoder,
+               lifetime: 7200
              }
     end
 
@@ -195,4 +196,63 @@ defmodule PlugDbSession.StoreTest do
       refute hash1 == hash2
     end
   end
+
+  describe "session expiration" do
+    test "it creates a new session when the existing session is expired" do
+      # Create an expired session (last_active_at is 3 hours ago)
+      expired_token = "expired-token"
+      expired_session = %Session{
+        id: :crypto.hash(:sha256, expired_token),
+        data: :erlang.term_to_binary(%{"old" => "data"}),
+        last_active_at: DateTime.utc_now() |> DateTime.add(-10800, :second) |> DateTime.truncate(:second),
+        created_at: DateTime.utc_now() |> DateTime.add(-10800, :second) |> DateTime.truncate(:second)
+      }
+
+      sessions = Process.get(:test_sessions, %{})
+      Process.put(:test_sessions, Map.put(sessions, expired_session.id, expired_session))
+
+      fake_cookie = %{"session_id" => expired_token} |> :erlang.term_to_binary() |> Base.encode64(padding: false)
+      opts_with_lifetime = Map.put(@opts, :lifetime, 7200)
+
+      {token, data} = Store.get(nil, fake_cookie, opts_with_lifetime)
+
+      # Should create a new session, not return the expired one
+      refute token == expired_token
+      assert data == %{}
+    end
+
+    test "it returns session data when session is not expired" do
+      known_token = "test-token-with-data"
+      fake_cookie = %{"session_id" => known_token} |> :erlang.term_to_binary() |> Base.encode64(padding: false)
+      opts_with_lifetime = Map.put(@opts, :lifetime, 7200)
+
+      {token, data} = Store.get(nil, fake_cookie, opts_with_lifetime)
+
+      assert token == known_token
+      assert data == %{"foo" => "bar"}
+    end
+
+    test "it does not expire sessions when lifetime is nil" do
+      # Create an old session
+      old_token = "old-token"
+      old_session = %Session{
+        id: :crypto.hash(:sha256, old_token),
+        data: :erlang.term_to_binary(%{"still" => "valid"}),
+        last_active_at: DateTime.utc_now() |> DateTime.add(-86400, :second) |> DateTime.truncate(:second),
+        created_at: DateTime.utc_now() |> DateTime.add(-86400, :second) |> DateTime.truncate(:second)
+      }
+
+      sessions = Process.get(:test_sessions, %{})
+      Process.put(:test_sessions, Map.put(sessions, old_session.id, old_session))
+
+      fake_cookie = %{"session_id" => old_token} |> :erlang.term_to_binary() |> Base.encode64(padding: false)
+      opts_no_expiry = Map.put(@opts, :lifetime, nil)
+
+      {token, data} = Store.get(nil, fake_cookie, opts_no_expiry)
+
+      assert token == old_token
+      assert data == %{"still" => "valid"}
+    end
+  end
+
 end

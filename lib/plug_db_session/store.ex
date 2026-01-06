@@ -17,11 +17,14 @@ defmodule PlugDbSession.Store do
   ## Options
     * `:otp_app` - (required) your otp app atom
     * `:cookie_keys` - (optional) array of session data keys to include directly on the cookie
+    * `:lifetime` - (optional) session lifetime in seconds, defaults to 7200 (2 hours). Set to `nil` to disable expiration.
+
   """
 
   @behaviour Plug.Session.Store
 
   @token_bytes 32
+  @default_lifetime 7200
 
   @impl Plug.Session.Store
   def init(opts) do
@@ -33,7 +36,8 @@ defmodule PlugDbSession.Store do
       vault: Keyword.get(config, :vault),
       repo: Keyword.get(config, :repo),
       schema: Keyword.get(config, :schema),
-      encoder: Keyword.get(config, :encoder, PlugDbSession.Encoder)
+      encoder: Keyword.get(config, :encoder, PlugDbSession.Encoder),
+      lifetime: Keyword.get(opts, :lifetime, @default_lifetime)
     }
   end
 
@@ -41,7 +45,8 @@ defmodule PlugDbSession.Store do
   def get(_conn, cookie, opts) do
     with {:ok, %{"session_id" => token}} <- decrypt_cookie(cookie, opts),
          hashed_id <- hash_token(token),
-         %{} = session <- opts.repo.get(opts.schema, hashed_id) do
+         %{} = session <- opts.repo.get(opts.schema, hashed_id),
+         false <- session_expired?(session, opts) do
       {token, decrypt_data(session.data, opts)}
     else
       _ ->
@@ -92,6 +97,15 @@ defmodule PlugDbSession.Store do
   defp hash_token(token) do
     :crypto.hash(:sha256, token)
   end
+
+  defp session_expired?(_session, %{lifetime: nil}), do: false
+
+  defp session_expired?(session, %{lifetime: lifetime}) do
+    expires_at = DateTime.add(session.last_active_at, lifetime, :second)
+    DateTime.compare(DateTime.utc_now(), expires_at) == :gt
+  end
+
+  defp session_expired?(_session, _opts), do: false
 
   defp create_cookie(token, session_data, opts) do
     cookie_keys = Map.get(opts, :cookie_keys, [])
