@@ -8,9 +8,12 @@ The default cookie session store places all data directly into the cookie and th
 
 The PlugDbSession package still uses cookies, but it offloads all of the data storage to your database:
 
-1. We create a record in the database with a unique ID like `{ id: "some-uuid", data: <encrypted binary>, last_active_at: "2023-01-01T00:00Z" }`
-2. We send the browser an encrypted cookie that looks like `{ "session_id": "some-uuid" }`
-3. When you set session data in your app, instead of adding directly to that cookie we look up the row in the  `sessions` table and update the `data` column (which is also encrypted)
+1. We generate a random session token and store its SHA-256 hash as the database primary key
+2. We send the browser an encrypted cookie containing the raw token: `{ "session_id": "<random-token>" }`
+3. On subsequent requests, we hash the token from the cookie to look up the session in the database
+4. Session data is stored encrypted in the `data` column
+
+This hash-based approach protects against timing attacks - even if encryption is bypassed, an attacker cannot derive valid session tokens from database lookups.
 
 Using this approach, you can:
 - store much more data in the session
@@ -66,7 +69,8 @@ defmodule MyApp.Repo.Migrations.CreateSessionsTable do
 
   def up do
     create table("sessions", primary_key: false) do
-      add :id, :uuid, null: false, primary_key: true
+      # The ID is a SHA-256 hash of the session token (32 bytes)
+      add :id, :binary, null: false, primary_key: true
       add :data, :binary, null: false
       add :last_active_at, :utc_datetime, null: false, default: fragment("now()")
       add :created_at, :utc_datetime, null: false, default: fragment("now()")
@@ -86,7 +90,8 @@ We also need to create a schema for the sessions:
 defmodule MyApp.Sessions.Session do
   use Ecto.Schema
 
-  @primary_key {:id, :binary_id, autogenerate: true}
+  # The ID is a SHA-256 hash (binary), not auto-generated
+  @primary_key {:id, :binary, autogenerate: false}
 
   schema "sessions" do
     field :data, :binary
@@ -152,7 +157,7 @@ from (
 
 ### @session_options
 
-You can optionally include more data directly in the cookie, though it is not recommended. By default we store an object like `{ session_id: 10, _csrf_token: "abcd" }`.
+You can optionally include more data directly in the cookie, though it is not recommended. By default we store an object like `{ session_id: "<token>", _csrf_token: "abcd" }`.
 
 If you want to customize this, do so in the endpoint:
 
