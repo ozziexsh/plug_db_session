@@ -8,15 +8,19 @@ The default cookie session store places all data directly into the cookie and th
 
 The PlugDbSession package still uses cookies, but it offloads all of the data storage to your database:
 
-1. We create a record in the database with a unique ID like `{ id: "some-uuid", data: <encrypted binary>, last_active_at: "2023-01-01T00:00Z" }`
-2. We send the browser an encrypted cookie that looks like `{ "session_id": "some-uuid" }`
-3. When you set session data in your app, instead of adding directly to that cookie we look up the row in the  `sessions` table and update the `data` column (which is also encrypted)
+1. We generate a random session token and store its SHA-256 hash as the database primary key
+2. We send the browser an encrypted cookie containing the raw token: `{ "session_id": "<random-token>" }`
+3. On subsequent requests, we hash the token from the cookie to look up the session in the database
+4. Session data is stored encrypted in the `data` column
+
+This hash-based approach protects against timing attacks - even if encryption is bypassed, an attacker cannot derive valid session tokens from database lookups.
 
 Using this approach, you can:
 - store much more data in the session
 - store any elixir data type in the session (see ["considerations"](#considerations) below)
 - revoke sessions on demand
 - see when they were last active
+- automatically expire sessions after a configurable lifetime
 
 In the future we will allow arbitrary data to be added to the session schema, allowing you to collect metadata such as tying a session to a user_id, IP, user agent, etc. This can be useful if you e.g. show your logged in users which devices they are logged into and allow them to revoke access on their own.
 
@@ -66,7 +70,8 @@ defmodule MyApp.Repo.Migrations.CreateSessionsTable do
 
   def up do
     create table("sessions", primary_key: false) do
-      add :id, :uuid, null: false, primary_key: true
+      # The ID is a SHA-256 hash of the session token (32 bytes)
+      add :id, :binary, null: false, primary_key: true
       add :data, :binary, null: false
       add :last_active_at, :utc_datetime, null: false, default: fragment("now()")
       add :created_at, :utc_datetime, null: false, default: fragment("now()")
@@ -86,7 +91,8 @@ We also need to create a schema for the sessions:
 defmodule MyApp.Sessions.Session do
   use Ecto.Schema
 
-  @primary_key {:id, :binary_id, autogenerate: true}
+  # The ID is a SHA-256 hash (binary), not auto-generated
+  @primary_key {:id, :binary, autogenerate: false}
 
   schema "sessions" do
     field :data, :binary
@@ -114,7 +120,8 @@ defmodule MyAppWeb.Endpoint do
   @session_options [
     store: PlugDbSession.Store,
     key: "_my_app_key",
-    otp_app: :my_app
+    otp_app: :my_app,
+    lifetime: 7200  # optional, defaults to 7200 seconds (2 hours)
   ]
 ```
 
@@ -128,31 +135,89 @@ pipeline :browser do
   plug :put_root_layout, {PhxWeb.Layouts, :root}
   plug :protect_from_forgery
   plug :put_secure_browser_headers
-  plug PlugDbSession.UpdateActivity # <-- add this line
+  plug PlugDbSession.UpdateActivity, otp_app: :my_app # <-- add this line
 end
 ```
 
 That is it! You can now interact with the plug session as you normally would.
 
-## Pruning
+## Session Lifetime
 
-There will come a time when unused sessions start to build up in your database. For the most part, if you are logging users out with `configure_session(drop: true)` then the session will be deleted from the database. As it happens though, you will likely have a lot of users visit your website once or twice then never again, thus leaving a useless inactive row in your database.
+By default, sessions expire after 2 hours (7200 seconds) of inactivity. The expiration is based on the `last_active_at` timestamp, which is updated on each request when using `PlugDbSession.UpdateActivity`.
 
-There is a plan to add automatic pruning to the database directly in the package, however until that is implemented you will likely want to run a job once every X days depending on the size of your app that does something like:
+You can customize the lifetime in your endpoint:
 
 ```elixir
-from (
-  s in Session,
-  where: s.last_active_at < datetime_add(^DateTime.utc_now(), -1, "month")
+@session_options [
+  store: PlugDbSession.Store,
+  key: "_my_app_key",
+  otp_app: :my_app,
+  lifetime: 86400  # 24 hours in seconds
+]
+```
+
+To disable automatic expiration entirely, set `lifetime: nil`.
+
+## Session Regeneration
+
+To prevent session fixation attacks, you should regenerate the session ID after authentication state changes (login/logout). Use Plug's built-in `configure_session/2`:
+
+### After Login
+
+Regenerate the session ID while preserving data:
+
+```elixir
+conn
+|> configure_session(renew: true)
+|> put_session(:user_id, user.id)
+```
+
+### On Logout
+
+Drop the session entirely:
+
+```elixir
+conn
+|> configure_session(drop: true)
+```
+
+## Pruning / Garbage Collection
+
+Expired sessions are automatically pruned using a lottery system. By default, there's a 2% chance on each request that garbage collection will run asynchronously.
+
+### Lottery Configuration
+
+Configure the lottery odds in your router:
+
+```elixir
+# Default: 2% chance (2 out of 100)
+plug PlugDbSession.UpdateActivity, otp_app: :my_app
+
+# Custom odds: 5% chance
+plug PlugDbSession.UpdateActivity, otp_app: :my_app, lottery: {5, 100}
+
+# Disable lottery (for scheduled job approach)
+plug PlugDbSession.UpdateActivity, otp_app: :my_app, lottery: {0, 1}
+```
+
+### Scheduled Job (Recommended for High Traffic)
+
+For high-traffic applications, disable the lottery and use a scheduled job instead:
+
+```elixir
+# In your Oban worker, Quantum job, etc.
+PlugDbSession.UpdateActivity.prune(
+  repo: MyApp.Repo,
+  schema: MyApp.Sessions.Session,
+  lifetime: 7200  # prune sessions older than 2 hours
 )
-|> MyRepo.delete_all()
 ```
 
 ## Customization
 
 ### @session_options
 
-You can optionally include more data directly in the cookie, though it is not recommended. By default we store an object like `{ session_id: 10, _csrf_token: "abcd" }`.
+You can optionally include more data directly in the cookie, though it is not recommended. By default we store an object like `{ session_id: "<token>", _csrf_token: "abcd" }`.
 
 If you want to customize this, do so in the endpoint:
 
@@ -172,7 +237,7 @@ Values will be taken from the session data matching the provided keys and added 
 
 ### Encoder / Serialization
 
-You can change how the session is serialized to the database by specifying an `:encoder` conifg. The module must have two methods: `encode!/1` which takes a map and returns a binary/string, and `decode!/1` which takes a binary/string and returns a map. For example, you could use `Jason`:
+You can change how the session is serialized to the database by specifying an `:encoder` config. The module must have two methods: `encode!/1` which takes a map and returns a binary/string, and `decode!/1` which takes a binary/string and returns a map. For example, you could use `Jason`:
 
 ```elixir
 config :my_app, PlugDbSession, ecoder: Jason
@@ -191,3 +256,4 @@ config :my_app, PlugDbSession, vault: MyApp.CustomEncryption
 The session schema cannot be changed at this point in time, however there are plans to allow that in the future.
 
 The `data` field type could technically be changed if you are not using cloak_ecto, however you must use a data type that allows passing a map when inserting to the database.
+
